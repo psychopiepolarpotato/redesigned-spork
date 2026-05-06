@@ -16,6 +16,7 @@ jobs:
       - run: |
           set -euo pipefail
 
+          sleep 30
           gh run list --workflow="Ubuntu: Tailscale Gateway" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
           curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
@@ -37,7 +38,7 @@ jobs:
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
 
-          sleep 150
+          sleep 120
 
           python3 -c "$P"
           gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
