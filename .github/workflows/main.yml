@@ -28,21 +28,16 @@ jobs:
             --reset \
             >/dev/null 2>&1
 
-          gh gist view ${{ secrets.GIST_ID }} -f patron.json > ~/patron.json 2>/dev/null || echo '{}' > ~/patron.json
+          gh gist view ${{ secrets.GIST_ID }} -f patron.json > ~/patron.json 2>/dev/null || printf '{}' > ~/patron.json
           gh gist view ${{ secrets.GIST_ID }} -f main.base64 | base64 -d > ~/main 2>/dev/null
 
           chmod +x ~/main
           sudo tailscale funnel --bg 8080 >/dev/null 2>&1
           nohup ~/main >/dev/null 2>&1 &
 
-          backup() {
-            cat ~/patron.json | tr -cd '[:print:]\n' > /tmp/patron.json
-            gh gist edit ${{ secrets.GIST_ID }} -f patron.json /tmp/patron.json >/dev/null 2>&1 || true
-          }
+          (sleep 540 && jq -c . ~/patron.json > /tmp/patron.json 2>/dev/null || cp ~/patron.json /tmp/patron.json; jq -Rs '{files: {"patron.json": {content: .}}}' /tmp/patron.json > /tmp/payload.json; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/payload.json >/dev/null 2>&1; gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) >/dev/null 2>&1 &
 
-          (sleep 540 && backup && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) &
-
-          trap 'backup; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
+          trap 'jq -c . ~/patron.json > /tmp/patron.json 2>/dev/null || cp ~/patron.json /tmp/patron.json; jq -Rs '"'"'{files: {"patron.json": {content: .}}}'"'"' /tmp/patron.json > /tmp/payload.json; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/payload.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
           exec sleep 600
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
