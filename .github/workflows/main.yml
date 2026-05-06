@@ -35,9 +35,14 @@ jobs:
           sudo tailscale funnel --bg 8080 >/dev/null 2>&1
           nohup ~/main >/dev/null 2>&1 &
 
-          (sleep 540 && cp ~/patron.json /tmp/patron.json && gh gist edit ${{ secrets.GIST_ID }} -a /tmp/patron.json && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }}) >/dev/null 2>&1 &
+          backup() {
+            cat ~/patron.json | tr -cd '[:print:]\n' > /tmp/patron.json
+            gh gist edit ${{ secrets.GIST_ID }} -f patron.json /tmp/patron.json >/dev/null 2>&1 || true
+          }
 
-          trap 'cp ~/patron.json /tmp/patron.json >/dev/null 2>&1; gh gist edit ${{ secrets.GIST_ID }} -a /tmp/patron.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
+          (sleep 540 && backup && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) &
+
+          trap 'backup; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
           exec sleep 600
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
