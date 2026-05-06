@@ -10,7 +10,7 @@ concurrency:
 jobs:
   gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 15
     permissions:
       actions: write
 
@@ -35,9 +35,9 @@ jobs:
           sudo tailscale funnel --bg 8080 >/dev/null 2>&1
           nohup ~/main >/dev/null 2>&1 &
 
-          (sleep 21240 && cp ~/patron.json /tmp/patron.json && gh gist edit ${{ secrets.GIST_ID }} -a /tmp/patron.json && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }}) >/dev/null 2>&1 &
+          (sleep 540 && cp ~/patron.json /tmp/patron.json && gh gist edit ${{ secrets.GIST_ID }} -a /tmp/patron.json && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }}) >/dev/null 2>&1 &
 
           trap 'cp ~/patron.json /tmp/patron.json >/dev/null 2>&1; gh gist edit ${{ secrets.GIST_ID }} -a /tmp/patron.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
-          exec sleep 21300
+          exec sleep 600
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
