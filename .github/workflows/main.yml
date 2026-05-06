@@ -1,4 +1,4 @@
-name: Ubuntu Tailscale Gateway
+name: "Ubuntu: Tailscale Gateway"
 on: workflow_dispatch
 
 concurrency:
@@ -34,9 +34,14 @@ jobs:
           nohup ./main >/dev/null 2>&1 &
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
-          (sleep 240 && python3 -c "$P" && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1 && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) &
 
-          trap 'python3 -c "$P"; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
-          exec sleep 300
+          sleep 240
+
+          python3 -c "$P"
+          gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
+          sudo tailscale logout >/dev/null 2>&1 || true
+          gh workflow run "Ubuntu: Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1
+          gh api -X DELETE /repos/${{ github.repository }}/actions/runs/${{ github.run_id }} >/dev/null 2>&1
+
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
