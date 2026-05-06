@@ -8,7 +8,7 @@ concurrency:
 jobs:
   gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       actions: write
 
@@ -18,24 +18,22 @@ jobs:
 
           curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
           sudo systemctl restart tailscaled >/dev/null 2>&1
-          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" --reset >/dev/null 2>&1
+          sleep 15
+          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" --force-reauth >/dev/null 2>&1
+          sudo tailscale funnel --bg 8080 >/dev/null 2>&1
 
           GIST="$(gh api /gists/${{ secrets.GIST_ID }} 2>/dev/null)"
           curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["patron.json"].raw_url')" -o ~/patron.json 2>/dev/null || printf '{}' > ~/patron.json
           curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["main.base64"].raw_url')" 2>/dev/null | base64 -d > ~/main
-
           chmod +x ~/main
-          sudo tailscale funnel --bg 8080 >/dev/null 2>&1
 
           cd ~
           nohup ./main >/dev/null 2>&1 &
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
-
-          (sleep 540 && python3 -c "$P" && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1 && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) &
+          (sleep 240 && python3 -c "$P" && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1 && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1) &
 
           trap 'python3 -c "$P"; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
-
-          exec sleep 600
+          exec sleep 300
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
