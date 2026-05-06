@@ -1,7 +1,5 @@
 name: Ubuntu Tailscale Gateway
-
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 concurrency:
   group: tailscale-gateway
@@ -20,32 +18,22 @@ jobs:
 
           curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
           sudo systemctl restart tailscaled >/dev/null 2>&1
+          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" --reset >/dev/null 2>&1
 
-          sudo tailscale up \
-            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
-            --hostname="linux-azure" \
-            --ssh \
-            --reset \
-            >/dev/null 2>&1
-
-          PATRON_URL="$(gh api /gists/${{ secrets.GIST_ID }} --jq '.files["patron.json"].raw_url' 2>/dev/null)"
-          MAIN_URL="$(gh api /gists/${{ secrets.GIST_ID }} --jq '.files["main.base64"].raw_url' 2>/dev/null)"
-
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$PATRON_URL" -o ~/patron.json >/dev/null 2>&1 || printf '{}' > ~/patron.json
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$MAIN_URL" 2>/dev/null | base64 -d > ~/main
+          GIST="$(gh api /gists/${{ secrets.GIST_ID }} 2>/dev/null)"
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo $GIST | jq -r '.files["patron.json"].raw_url')" -o ~/patron.json 2>/dev/null || printf '{}' > ~/patron.json
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo $GIST | jq -r '.files["main.base64"].raw_url')" 2>/dev/null | base64 -d > ~/main
 
           chmod +x ~/main
           sudo tailscale funnel --bg 8080 >/dev/null 2>&1
           nohup ~/main >/dev/null 2>&1 &
 
-          (
-            sleep 540
-            python3 -c 'import json; p=open("/home/runner/patron.json","r",encoding="utf-8",errors="ignore").read(); open("/tmp/payload.json","w").write(json.dumps({"files":{"patron.json":{"content":p}}}))'
-            gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/payload.json >/dev/null 2>&1
-            gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1
-          ) &
+          P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
 
-          trap 'python3 -c '"'"'import json; p=open("/home/runner/patron.json","r",encoding="utf-8",errors="ignore").read(); open("/tmp/payload.json","w").write(json.dumps({"files":{"patron.json":{"content":p}}}))'"'"'; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/payload.json >/dev/null 2>&1; sudo tailscale logout >/dev/null 2>&1 || true' EXIT
+          (sleep 540 && python3 -c "$P" && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }}) >/dev/null 2>&1 &
+
+          trap 'python3 -c "$P"; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json; sudo tailscale logout || true' EXIT 2>/dev/null
+
           exec sleep 600
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
