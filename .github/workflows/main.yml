@@ -38,11 +38,17 @@ jobs:
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
 
+          backup() {
+            python3 -c "$P"
+            gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
+            sudo tailscale logout >/dev/null 2>&1 || true
+          }
+
+          trap 'backup' EXIT
+
           sleep 21210
 
-          python3 -c "$P"
-          gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
-          sudo tailscale logout >/dev/null 2>&1 || true
+          backup
           gh workflow run "Ubuntu: Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1
 
         env:
