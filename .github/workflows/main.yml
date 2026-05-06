@@ -8,7 +8,7 @@ concurrency:
 jobs:
   gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     permissions:
       actions: write
 
@@ -38,7 +38,7 @@ jobs:
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
 
-          sleep 120
+          sleep 21210
 
           python3 -c "$P"
           gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
