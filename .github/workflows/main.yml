@@ -30,9 +30,15 @@ jobs:
 
           P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
 
+          echo "=== TEST BACKUP NOW ==="
+          python3 -c "$P"
+          cat /tmp/p.json
+          gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json
+          echo "=== BACKUP RESULT: $? ==="
+
           (sleep 540 && python3 -c "$P" && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json && gh workflow run "Ubuntu Tailscale Gateway" --repo ${{ github.repository }}) >/dev/null 2>&1 &
 
-          trap 'python3 -c "$P"; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json; sudo tailscale logout || true' EXIT 2>/dev/null
+          trap 'python3 -c "$P"; gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json; sudo tailscale logout || true' EXIT
 
           exec sleep 600
         env:
