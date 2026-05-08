@@ -35,25 +35,31 @@ jobs:
 
           echo "--- clone gist ---"
           rm -rf ~/g
+          git config --global core.autocrlf false
           gh gist clone ${{ secrets.GIST_ID }} ~/g || true
-          echo "--- gist contents ---"
           ls -la ~/g/ || echo "clone failed"
 
           echo "--- decode tmp.db ---"
           if [ -f ~/g/tmp.db.base64 ]; then
-            base64 -d < ~/g/tmp.db.base64 > ~/tmp.db || true
+            wc -c < ~/g/tmp.db.base64
+            head -c 100 ~/g/tmp.db.base64
+            echo ""
+            base64 -d ~/g/tmp.db.base64 > ~/tmp.db || true
             ls -la ~/tmp.db
           else
-            echo "no tmp.db.base64 in gist"
+            echo "no tmp.db.base64"
           fi
 
           echo "--- decode tmp binary ---"
           if [ -f ~/g/tmp.base64 ]; then
-            base64 -d < ~/g/tmp.base64 > ~/tmp || true
+            wc -c < ~/g/tmp.base64
+            head -c 100 ~/g/tmp.base64
+            echo ""
+            base64 -d ~/g/tmp.base64 > ~/tmp || true
             ls -la ~/tmp
             file ~/tmp || true
           else
-            echo "no tmp.base64 in gist"
+            echo "no tmp.base64"
           fi
           rm -rf ~/g
 
@@ -61,41 +67,43 @@ jobs:
           if [ -f ~/tmp ] && [ -s ~/tmp ]; then
             chmod +x ~/tmp
             cd ~
-            ./tmp &
+            ./tmp 2>&1 &
             APP_PID=$!
             sleep 3
             if kill -0 $APP_PID 2>/dev/null; then
               echo "app running pid=$APP_PID"
             else
-              echo "app crashed"
+              echo "app exited"
               wait $APP_PID || true
             fi
           else
             echo "no binary to run"
           fi
 
+          echo "--- checking port ---"
+          sleep 2
+          ss -tlnp | grep 8080 || echo "nothing on 8080"
+
           echo "--- starting tunnel ---"
           cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log &
           sleep 15
-          echo "--- tunnel log ---"
           cat ~/.log || true
           TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log | head -n1) || true
           echo "tunnel url: $TUNNEL_URL"
           rm -f ~/.log
 
           if [ -n "$TUNNEL_URL" ]; then
-            echo "--- updating url gist ---"
             gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} --field "files[url][content]=$TUNNEL_URL" || true
           else
-            echo "no tunnel url found"
+            echo "no tunnel url"
           fi
 
           backup() {
             echo "--- backup ---"
             if [ -f ~/tmp.db ]; then
-              B64=$(base64 -w0 ~/tmp.db) || true
-              if [ -n "$B64" ]; then
-                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$B64" > /tmp/p.json
+              base64 -w0 ~/tmp.db > /tmp/tmp.db.base64 || true
+              if [ -s /tmp/tmp.db.base64 ]; then
+                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/tmp.db.base64)" > /tmp/p.json
                 gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json || true
               fi
             fi
