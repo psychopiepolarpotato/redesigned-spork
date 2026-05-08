@@ -64,13 +64,11 @@ jobs:
 
           while true; do
             sleep 300
-            if ! curl -fsSL -o /dev/null -w '' "https://${TUNNEL_URL#https://}" 2>/dev/null; then
-              NEW_URL=$(start_tunnel)
-              rm -f ~/.log
-              if [ -n "$NEW_URL" ]; then
-                TUNNEL_URL="$NEW_URL"
-                publish_url "$TUNNEL_URL"
-              fi
+            NEW_URL=$(start_tunnel)
+            rm -f ~/.log
+            if [ -n "$NEW_URL" ]; then
+              TUNNEL_URL="$NEW_URL"
+              publish_url "$TUNNEL_URL"
             fi
           done &
 
