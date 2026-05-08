@@ -74,39 +74,37 @@ jobs:
             return 1
           }
 
-          publish_url() {
-            [ -n "$1" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$1" >/dev/null 2>&1 || true
-          }
-
-          save_db() {
-            [ -f ~/tmp.db ] || return 0
-            base64 -w0 ~/tmp.db > /tmp/tmp.db.base64.bak 2>/dev/null || true
-            [ -s /tmp/tmp.db.base64.bak ] || return 0
-            printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/tmp.db.base64.bak)" > /tmp/tmp.db.patch.bak 2>/dev/null
-            gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/tmp.db.patch.bak >/dev/null 2>&1 || true
-            rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.patch.bak
+          sync_state() {
+            if [ -f ~/tmp.db ]; then
+              base64 -w0 ~/tmp.db > /tmp/tmp.db.base64.bak 2>/dev/null || true
+              if [ -s /tmp/tmp.db.base64.bak ]; then
+                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/tmp.db.base64.bak)" > /tmp/tmp.db.bak 2>/dev/null
+                gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/tmp.db.bak >/dev/null 2>&1 || true
+                rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.bak
+              fi
+            fi
+            [ -n "${TUNNEL_URL:-}" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1 || true
           }
 
           start_tunnel
-          publish_url "$TUNNEL_URL"
-          trap 'save_db' EXIT
+          sync_state
+          trap 'sync_state' EXIT
 
           while true; do
-            sleep 60
-
-            save_db
+            sleep 1800
 
             OLD_PID="${TUNNEL_PID:-}"
             if start_tunnel; then
-              publish_url "$TUNNEL_URL"
               [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
             fi
+
+            sync_state
 
             kill -0 "$APP_PID" >/dev/null 2>&1 || exit 1
           done &
 
           sleep 21210
-          save_db
+          sync_state
           gh workflow run "Ubuntu: Background Job" --repo ${{ github.repository }} >/dev/null 2>&1 || true
 
         env:
