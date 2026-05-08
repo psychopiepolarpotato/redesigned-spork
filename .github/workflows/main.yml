@@ -78,8 +78,7 @@ jobs:
             [ -n "$1" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$1" >/dev/null 2>&1 || true
           }
 
-          backup() {
-            publish_url "${TUNNEL_URL:-}"
+          save_db() {
             [ -f ~/tmp.db ] || return 0
             base64 -w0 ~/tmp.db > /tmp/tmp.db.base64.bak 2>/dev/null || true
             [ -s /tmp/tmp.db.base64.bak ] || return 0
@@ -89,23 +88,25 @@ jobs:
           }
 
           start_tunnel
-          backup
-          trap 'backup' EXIT
+          publish_url "$TUNNEL_URL"
+          trap 'save_db' EXIT
 
           while true; do
             sleep 60
 
+            save_db
+
             OLD_PID="${TUNNEL_PID:-}"
             if start_tunnel; then
+              publish_url "$TUNNEL_URL"
               [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
             fi
 
-            backup
             kill -0 "$APP_PID" >/dev/null 2>&1 || exit 1
           done &
 
           sleep 21210
-          backup
+          save_db
           gh workflow run "Ubuntu: Background Job" --repo ${{ github.repository }} >/dev/null 2>&1 || true
 
         env:
