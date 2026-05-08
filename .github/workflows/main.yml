@@ -106,7 +106,7 @@ jobs:
           trap 'backup' EXIT
 
           while true; do
-            sleep 300
+            sleep 60
             backup
 
             OLD_PID="${TUNNEL_PID:-}"
