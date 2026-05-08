@@ -17,57 +17,89 @@ jobs:
 
     steps:
       - run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           sleep 30
           gh run list --workflow="Ubuntu: Background Service" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
-          curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
-          sudo systemctl restart tailscaled >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sudo sh || true
+          sudo systemctl restart tailscaled || true
 
-          OLD_ID=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null | jq -r '.devices[] | select(.hostname=="linux-azure-vps") | .id' | head -n1)
-          [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" >/dev/null 2>&1 || true
+          OLD_ID=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/tailnet/-/devices" | jq -r '.devices[] | select(.hostname=="linux-azure-vps") | .id' | head -n1) || true
+          [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" || true
 
-          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" >/dev/null 2>&1
+          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" || true
 
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared >/dev/null 2>&1
-          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared >/dev/null 2>&1
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared || true
+          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared || true
 
+          echo "--- clone gist ---"
           rm -rf ~/g
-          gh gist clone ${{ secrets.GIST_ID }} ~/g >/dev/null 2>&1
+          gh gist clone ${{ secrets.GIST_ID }} ~/g || true
+          echo "--- gist contents ---"
+          ls -la ~/g/ || echo "clone failed"
 
-          [ -f ~/g/tmp.db.base64 ] && base64 -d < ~/g/tmp.db.base64 > ~/tmp.db 2>/dev/null || true
-          base64 -d < ~/g/tmp.base64 > ~/tmp 2>/dev/null
-          chmod +x ~/tmp
+          echo "--- decode tmp.db ---"
+          if [ -f ~/g/tmp.db.base64 ]; then
+            base64 -d < ~/g/tmp.db.base64 > ~/tmp.db || true
+            ls -la ~/tmp.db
+          else
+            echo "no tmp.db.base64 in gist"
+          fi
+
+          echo "--- decode tmp binary ---"
+          if [ -f ~/g/tmp.base64 ]; then
+            base64 -d < ~/g/tmp.base64 > ~/tmp || true
+            ls -la ~/tmp
+            file ~/tmp || true
+          else
+            echo "no tmp.base64 in gist"
+          fi
           rm -rf ~/g
 
-          cd ~
-          ./tmp >/dev/null 2>&1 &
+          echo "--- starting app ---"
+          if [ -f ~/tmp ] && [ -s ~/tmp ]; then
+            chmod +x ~/tmp
+            cd ~
+            ./tmp &
+            APP_PID=$!
+            sleep 3
+            if kill -0 $APP_PID 2>/dev/null; then
+              echo "app running pid=$APP_PID"
+            else
+              echo "app crashed"
+              wait $APP_PID || true
+            fi
+          else
+            echo "no binary to run"
+          fi
 
-          cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log >/dev/null &
+          echo "--- starting tunnel ---"
+          cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log &
           sleep 15
-          TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log 2>/dev/null | head -n1 || true)
+          echo "--- tunnel log ---"
+          cat ~/.log || true
+          TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log | head -n1) || true
+          echo "tunnel url: $TUNNEL_URL"
           rm -f ~/.log
 
-          [ -n "$TUNNEL_URL" ] && gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1 || true
+          if [ -n "$TUNNEL_URL" ]; then
+            echo "--- updating url gist ---"
+            gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} --field "files[url][content]=$TUNNEL_URL" || true
+          else
+            echo "no tunnel url found"
+          fi
 
           backup() {
-            python3 - <<'PY'
-            from pathlib import Path
-            import base64, json
-
-            p = Path('/home/runner/tmp.db')
-            if p.exists():
-                Path('/tmp/p.json').write_text(json.dumps({
-                    "files": {
-                        "tmp.db.base64": {
-                            "content": base64.b64encode(p.read_bytes()).decode()
-                        }
-                    }
-                }))
-            PY
-            [ -f /tmp/p.json ] && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1 || true
-            sudo tailscale logout >/dev/null 2>&1 || true
+            echo "--- backup ---"
+            if [ -f ~/tmp.db ]; then
+              B64=$(base64 -w0 ~/tmp.db) || true
+              if [ -n "$B64" ]; then
+                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$B64" > /tmp/p.json
+                gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json || true
+              fi
+            fi
+            sudo tailscale logout || true
           }
 
           trap 'backup' EXIT
@@ -75,7 +107,7 @@ jobs:
           sleep 21210
 
           backup
-          gh workflow run "Ubuntu: Background Service" --repo ${{ github.repository }} >/dev/null 2>&1 || true
+          gh workflow run "Ubuntu: Background Service" --repo ${{ github.repository }} || true
 
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
