@@ -1,12 +1,15 @@
-name: "Ubuntu: Tailscale Gateway"
-on: workflow_dispatch
+---
+name: "Ubuntu: Background Service"
+
+"on":
+  workflow_dispatch:
 
 concurrency:
-  group: tailscale-gateway
+  group: background-service
   cancel-in-progress: true
 
 jobs:
-  gateway:
+  service:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     permissions:
@@ -17,7 +20,7 @@ jobs:
           set -euo pipefail
 
           sleep 30
-          gh run list --workflow="Ubuntu: Tailscale Gateway" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
+          gh run list --workflow="Ubuntu: Background Service" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
           curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
           sudo systemctl restart tailscaled >/dev/null 2>&1
@@ -26,21 +29,30 @@ jobs:
           [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" >/dev/null 2>&1 || true
 
           sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" >/dev/null 2>&1
-          sudo tailscale funnel --bg 8080 >/dev/null 2>&1
+
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared >/dev/null 2>&1
+          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared >/dev/null 2>&1
 
           GIST="$(gh api /gists/${{ secrets.GIST_ID }} 2>/dev/null)"
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["patron.json"].raw_url')" -o ~/patron.json 2>/dev/null || printf '{}' > ~/patron.json
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["main.base64"].raw_url')" 2>/dev/null | base64 -d > ~/main
-          chmod +x ~/main
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["tmp.db.base64"].raw_url')" 2>/dev/null | base64 -d > ~/tmp.db 2>/dev/null || true
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["tmp.base64"].raw_url')" 2>/dev/null | base64 -d > ~/tmp 2>/dev/null
+          chmod +x ~/tmp
 
           cd ~
-          nohup ./main >/dev/null 2>&1 &
+          ./tmp >/dev/null 2>&1 &
 
-          P='import json;open("/tmp/p.json","w").write(json.dumps({"files":{"patron.json":{"content":open("/home/runner/patron.json").read()}}}))'
+          cloudflared tunnel --url http://localhost:8080 2>&1 | tee /tmp/t.log >/dev/null &
+          sleep 10
+          TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/t.log | head -n1)
+          rm -f /tmp/t.log
+
+          gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} \
+            --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1
 
           backup() {
-            python3 -c "$P"
-            gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1
+            base64 ~/tmp.db > /tmp/tmp.db.base64 2>/dev/null
+            gh api --method PATCH /gists/${{ secrets.GIST_ID }} \
+              --field "files[tmp.db.base64][content]=@/tmp/tmp.db.base64" >/dev/null 2>&1
             sudo tailscale logout >/dev/null 2>&1 || true
           }
 
@@ -49,7 +61,7 @@ jobs:
           sleep 21210
 
           backup
-          gh workflow run "Ubuntu: Tailscale Gateway" --repo ${{ github.repository }} >/dev/null 2>&1
+          gh workflow run "Ubuntu: Background Service" --repo ${{ github.repository }} >/dev/null 2>&1
 
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
