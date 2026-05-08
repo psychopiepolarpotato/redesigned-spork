@@ -37,39 +37,90 @@ jobs:
 
           cd ~
           ./tmp >/dev/null 2>&1 &
+          APP_PID=$!
+
+          for _ in $(seq 1 15); do
+            ss -tln 2>/dev/null | grep -q '127.0.0.1:8080' && break
+            sleep 1
+          done
+
+          ss -tln 2>/dev/null | grep -q '127.0.0.1:8080'
+
+          TUNNEL_PID=
+          TUNNEL_URL=
 
           start_tunnel() {
-            pkill -f 'cloudflared tunnel' 2>/dev/null || true
-            sleep 2
-            cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log >/dev/null &
-            sleep 15
-            grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log 2>/dev/null | head -n1 || true
+            local log pid url code
+
+            log=$(mktemp)
+            cloudflared tunnel --url http://127.0.0.1:8080 >"$log" 2>&1 &
+            pid=$!
+
+            url=
+            for _ in $(seq 1 30); do
+              url=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | head -n1 || true)
+              [ -n "$url" ] && break
+              sleep 1
+            done
+
+            if [ -z "$url" ]; then
+              kill "$pid" >/dev/null 2>&1 || true
+              rm -f "$log"
+              return 1
+            fi
+
+            for _ in $(seq 1 30); do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)
+              case "$code" in
+                200|404|405)
+                  TUNNEL_PID="$pid"
+                  TUNNEL_URL="$url"
+                  rm -f "$log"
+                  return 0
+                  ;;
+              esac
+              sleep 1
+            done
+
+            kill "$pid" >/dev/null 2>&1 || true
+            rm -f "$log"
+            return 1
           }
 
           publish_url() {
             [ -n "$1" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$1" >/dev/null 2>&1 || true
           }
 
-          TUNNEL_URL=$(start_tunnel)
-          rm -f ~/.log
-          publish_url "$TUNNEL_URL"
-
           backup() {
+            [ -f ~/tmp.db ] || return 0
             base64 -w0 ~/tmp.db > /tmp/.json 2>/dev/null || true
-            [ -s /tmp/.json ] && printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/.json)" > /tmp/.json && gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/.json >/dev/null 2>&1 || true
-            rm -f /tmp/.json
+            [ -s /tmp/.json ] || return 0
+            printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/.json)" > /tmp/.patch 2>/dev/null
+            gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/.patch >/dev/null 2>&1 || true
+            rm -f /tmp/.json /tmp/.patch
           }
+
+          start_tunnel
+          publish_url "$TUNNEL_URL"
 
           trap 'backup' EXIT
 
           while true; do
             sleep 300
-            NEW_URL=$(start_tunnel)
-            rm -f ~/.log
-            if [ -n "$NEW_URL" ]; then
-              TUNNEL_URL="$NEW_URL"
+            backup
+
+            OLD_PID="${TUNNEL_PID:-}"
+            OLD_URL="${TUNNEL_URL:-}"
+
+            if start_tunnel; then
               publish_url "$TUNNEL_URL"
+              [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
+            else
+              TUNNEL_PID="$OLD_PID"
+              TUNNEL_URL="$OLD_URL"
             fi
+
+            kill -0 "$APP_PID" >/dev/null 2>&1 || exit 1
           done &
 
           sleep 21210
