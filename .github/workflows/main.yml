@@ -22,44 +22,46 @@ jobs:
           sleep 30
           gh run list --workflow="Ubuntu: Background Service" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
-          curl -fsSL https://tailscale.com/install.sh | sudo sh || true
-          sudo systemctl restart tailscaled || true
-
-          OLD_ID=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/tailnet/-/devices" | jq -r '.devices[] | select(.hostname=="linux-azure-vps") | .id' | head -n1) || true
-          [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" || true
-
-          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" || true
-
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared || true
           sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared || true
 
           echo "--- clone gist ---"
           rm -rf ~/g
           git config --global core.autocrlf false
+          git config --global core.eol lf
           gh gist clone ${{ secrets.GIST_ID }} ~/g || true
-          ls -la ~/g/ || echo "clone failed"
 
-          echo "--- decode tmp.db ---"
-          if [ -f ~/g/tmp.db.base64 ]; then
-            wc -c < ~/g/tmp.db.base64
-            head -c 100 ~/g/tmp.db.base64
-            echo ""
-            base64 -d ~/g/tmp.db.base64 > ~/tmp.db || true
-            ls -la ~/tmp.db
-          else
-            echo "no tmp.db.base64"
-          fi
+          echo "--- gist files ---"
+          ls -la ~/g/ || true
+          echo "---"
 
-          echo "--- decode tmp binary ---"
+          echo "--- check tmp.base64 ---"
           if [ -f ~/g/tmp.base64 ]; then
-            wc -c < ~/g/tmp.base64
-            head -c 100 ~/g/tmp.base64
+            echo "size: $(wc -c < ~/g/tmp.base64)"
+            echo "lines: $(wc -l < ~/g/tmp.base64)"
+            echo "first 80 chars:"
+            head -c 80 ~/g/tmp.base64 || true
             echo ""
-            base64 -d ~/g/tmp.base64 > ~/tmp || true
-            ls -la ~/tmp
+            echo "last 20 chars (hex):"
+            tail -c 20 ~/g/tmp.base64 | xxd || true
+
+            echo "--- stripping and decoding ---"
+            tr -d '\r\n' < ~/g/tmp.base64 > /tmp/clean.b64
+            echo "clean size: $(wc -c < /tmp/clean.b64)"
+            base64 -d /tmp/clean.b64 > ~/tmp || true
+            ls -la ~/tmp || true
             file ~/tmp || true
           else
-            echo "no tmp.base64"
+            echo "tmp.base64 NOT FOUND"
+          fi
+
+          echo "--- check tmp.db.base64 ---"
+          if [ -f ~/g/tmp.db.base64 ]; then
+            tr -d '\r\n' < ~/g/tmp.db.base64 > /tmp/cleandb.b64
+            base64 -d /tmp/cleandb.b64 > ~/tmp.db || true
+            ls -la ~/tmp.db || true
+          else
+            echo "tmp.db.base64 NOT FOUND"
           fi
           rm -rf ~/g
 
@@ -73,33 +75,29 @@ jobs:
             if kill -0 $APP_PID 2>/dev/null; then
               echo "app running pid=$APP_PID"
             else
-              echo "app exited"
-              wait $APP_PID || true
+              echo "app exited with code"
+              wait $APP_PID
+              echo "exit: $?"
             fi
           else
-            echo "no binary to run"
+            echo "no valid binary"
           fi
 
-          echo "--- checking port ---"
-          sleep 2
-          ss -tlnp | grep 8080 || echo "nothing on 8080"
+          echo "--- port check ---"
+          ss -tlnp | grep 8080 || echo "8080 not listening"
 
           echo "--- starting tunnel ---"
           cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log &
           sleep 15
-          cat ~/.log || true
           TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log | head -n1) || true
           echo "tunnel url: $TUNNEL_URL"
           rm -f ~/.log
 
           if [ -n "$TUNNEL_URL" ]; then
             gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} --field "files[url][content]=$TUNNEL_URL" || true
-          else
-            echo "no tunnel url"
           fi
 
           backup() {
-            echo "--- backup ---"
             if [ -f ~/tmp.db ]; then
               base64 -w0 ~/tmp.db > /tmp/tmp.db.base64 || true
               if [ -s /tmp/tmp.db.base64 ]; then
@@ -107,7 +105,6 @@ jobs:
                 gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json || true
               fi
             fi
-            sudo tailscale logout || true
           }
 
           trap 'backup' EXIT
