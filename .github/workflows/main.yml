@@ -33,14 +33,12 @@ jobs:
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared
           sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared
 
-          GIST_RAW="https://gist.githubusercontent.com/${{ github.repository_owner }}/${{ secrets.GIST_ID }}/raw"
-
           echo "--- fetching tmp.db ---"
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$GIST_RAW/tmp.db.base64" 2>/dev/null | base64 -d > ~/tmp.db || true
+          gh gist view ${{ secrets.GIST_ID }} --filename tmp.db.base64 | base64 -d > ~/tmp.db || true
           ls -la ~/tmp.db 2>/dev/null || echo "no tmp.db yet"
 
           echo "--- fetching tmp binary ---"
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$GIST_RAW/tmp.base64" | base64 -d > ~/tmp
+          gh gist view ${{ secrets.GIST_ID }} --filename tmp.base64 | base64 -d > ~/tmp
           ls -la ~/tmp
 
           echo "--- starting app ---"
@@ -81,7 +79,7 @@ jobs:
             if [ -f ~/tmp.db ]; then
               base64 ~/tmp.db > /tmp/tmp.db.base64
               gh api --method PATCH /gists/${{ secrets.GIST_ID }} \
-                --field "files[tmp.db.base64][content]=@/tmp/tmp.db.base64" || true
+                --field "files[tmp.db.base64][content]=@/tmp/tmp.db.base64" >/dev/null 2>&1 || true
             fi
             sudo tailscale logout || true
           }
