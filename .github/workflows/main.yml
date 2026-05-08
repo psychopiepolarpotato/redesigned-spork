@@ -33,25 +33,15 @@ jobs:
           curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared
           sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared
 
-          echo "--- fetching gist ---"
-          GIST="$(gh api /gists/${{ secrets.GIST_ID }})"
-          echo "gist keys: $(echo "$GIST" | jq -r '.files | keys[]')"
+          GIST_RAW="https://gist.githubusercontent.com/${{ github.repository_owner }}/${{ secrets.GIST_ID }}/raw"
 
           echo "--- fetching tmp.db ---"
-          DB_URL="$(echo "$GIST" | jq -r '.files["tmp.db.base64"].raw_url')"
-          echo "db url: $DB_URL"
-          if [ "$DB_URL" != "null" ] && [ -n "$DB_URL" ]; then
-            curl -fsSL -H "Authorization: token $GH_TOKEN" "$DB_URL" | base64 -d > ~/tmp.db || true
-          fi
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$GIST_RAW/tmp.db.base64" 2>/dev/null | base64 -d > ~/tmp.db || true
           ls -la ~/tmp.db 2>/dev/null || echo "no tmp.db yet"
 
           echo "--- fetching tmp binary ---"
-          BIN_URL="$(echo "$GIST" | jq -r '.files["tmp.base64"].raw_url')"
-          echo "bin url: $BIN_URL"
-          if [ "$BIN_URL" != "null" ] && [ -n "$BIN_URL" ]; then
-            curl -fsSL -H "Authorization: token $GH_TOKEN" "$BIN_URL" | base64 -d > ~/tmp
-          fi
-          ls -la ~/tmp 2>/dev/null || echo "no tmp binary yet"
+          curl -fsSL -H "Authorization: token $GH_TOKEN" "$GIST_RAW/tmp.base64" | base64 -d > ~/tmp
+          ls -la ~/tmp
 
           echo "--- starting app ---"
           if [ -f ~/tmp ] && [ -s ~/tmp ]; then
