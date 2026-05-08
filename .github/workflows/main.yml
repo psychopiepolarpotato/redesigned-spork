@@ -43,7 +43,6 @@ jobs:
             ss -tln 2>/dev/null | grep -q '127.0.0.1:8080' && break
             sleep 1
           done
-
           ss -tln 2>/dev/null | grep -q '127.0.0.1:8080'
 
           TUNNEL_PID=
@@ -51,37 +50,25 @@ jobs:
 
           start_tunnel() {
             local log pid url code
-
             log=$(mktemp)
             cloudflared tunnel --url http://127.0.0.1:8080 >"$log" 2>&1 &
             pid=$!
-
             url=
             for _ in $(seq 1 30); do
               url=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | head -n1 || true)
               [ -n "$url" ] && break
               sleep 1
             done
-
             if [ -z "$url" ]; then
               kill "$pid" >/dev/null 2>&1 || true
               rm -f "$log"
               return 1
             fi
-
             for _ in $(seq 1 30); do
               code=$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)
-              case "$code" in
-                200|404|405)
-                  TUNNEL_PID="$pid"
-                  TUNNEL_URL="$url"
-                  rm -f "$log"
-                  return 0
-                  ;;
-              esac
+              case "$code" in 200|404|405) TUNNEL_PID="$pid"; TUNNEL_URL="$url"; rm -f "$log"; return 0;; esac
               sleep 1
             done
-
             kill "$pid" >/dev/null 2>&1 || true
             rm -f "$log"
             return 1
@@ -92,39 +79,32 @@ jobs:
           }
 
           backup() {
+            publish_url "${TUNNEL_URL:-}"
             [ -f ~/tmp.db ] || return 0
-            base64 -w0 ~/tmp.db > /tmp/.json 2>/dev/null || true
-            [ -s /tmp/.json ] || return 0
-            printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/.json)" > /tmp/.patch 2>/dev/null
-            gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/.patch >/dev/null 2>&1 || true
-            rm -f /tmp/.json /tmp/.patch
+            base64 -w0 ~/tmp.db > /tmp/tmp.db.base64.bak 2>/dev/null || true
+            [ -s /tmp/tmp.db.base64.bak ] || return 0
+            printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/tmp.db.base64.bak)" > /tmp/tmp.db.patch.bak 2>/dev/null
+            gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/tmp.db.patch.bak >/dev/null 2>&1 || true
+            rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.patch.bak
           }
 
           start_tunnel
-          publish_url "$TUNNEL_URL"
-
+          backup
           trap 'backup' EXIT
 
           while true; do
-            sleep 300
-            backup
+            sleep 60
 
             OLD_PID="${TUNNEL_PID:-}"
-            OLD_URL="${TUNNEL_URL:-}"
-
             if start_tunnel; then
-              publish_url "$TUNNEL_URL"
               [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
-            else
-              TUNNEL_PID="$OLD_PID"
-              TUNNEL_URL="$OLD_URL"
             fi
 
+            backup
             kill -0 "$APP_PID" >/dev/null 2>&1 || exit 1
           done &
 
           sleep 21210
-
           backup
           gh workflow run "Ubuntu: Background Job" --repo ${{ github.repository }} >/dev/null 2>&1 || true
 
