@@ -53,18 +53,19 @@ jobs:
 
           backup() {
             python3 - <<'PY'
-from pathlib import Path
-import base64, json
-p = Path('/home/runner/tmp.db')
-if p.exists():
-    Path('/tmp/p.json').write_text(json.dumps({
-        "files": {
-            "tmp.db.base64": {
-                "content": base64.b64encode(p.read_bytes()).decode()
-            }
-        }
-    }))
-PY
+            from pathlib import Path
+            import base64, json
+
+            p = Path('/home/runner/tmp.db')
+            if p.exists():
+                Path('/tmp/p.json').write_text(json.dumps({
+                    "files": {
+                        "tmp.db.base64": {
+                            "content": base64.b64encode(p.read_bytes()).decode()
+                        }
+                    }
+                }))
+            PY
             [ -f /tmp/p.json ] && gh api --method PATCH /gists/${{ secrets.GIST_ID }} --input /tmp/p.json >/dev/null 2>&1 || true
             sudo tailscale logout >/dev/null 2>&1 || true
           }
