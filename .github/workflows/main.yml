@@ -17,43 +17,83 @@ jobs:
 
     steps:
       - run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           sleep 30
           gh run list --workflow="Ubuntu: Background Service" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
-          curl -fsSL https://tailscale.com/install.sh 2>/dev/null | sudo sh >/dev/null 2>&1
-          sudo systemctl restart tailscaled >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          sudo systemctl restart tailscaled
 
-          OLD_ID=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null | jq -r '.devices[] | select(.hostname=="linux-azure-vps") | .id' | head -n1)
-          [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" >/dev/null 2>&1 || true
+          OLD_ID=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/tailnet/-/devices" | jq -r '.devices[] | select(.hostname=="linux-azure-vps") | .id' | head -n1) || true
+          [ -n "$OLD_ID" ] && curl -fsSL -X DELETE -H "Authorization: Bearer ${{ secrets.TAILSCALE_API_KEY }}" "https://api.tailscale.com/api/v2/device/$OLD_ID" || true
 
-          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps" >/dev/null 2>&1
+          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="linux-azure-vps"
 
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared >/dev/null 2>&1
-          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared >/dev/null 2>&1
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared
+          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared
 
-          GIST="$(gh api /gists/${{ secrets.GIST_ID }} 2>/dev/null)"
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["tmp.db.base64"].raw_url')" 2>/dev/null | base64 -d > ~/tmp.db 2>/dev/null || true
-          curl -fsSL -H "Authorization: token $GH_TOKEN" "$(echo "$GIST" | jq -r '.files["tmp.base64"].raw_url')" 2>/dev/null | base64 -d > ~/tmp 2>/dev/null
-          chmod +x ~/tmp
+          echo "--- fetching gist ---"
+          GIST="$(gh api /gists/${{ secrets.GIST_ID }})"
+          echo "gist keys: $(echo "$GIST" | jq -r '.files | keys[]')"
 
-          cd ~
-          ./tmp >/dev/null 2>&1 &
+          echo "--- fetching tmp.db ---"
+          DB_URL="$(echo "$GIST" | jq -r '.files["tmp.db.base64"].raw_url')"
+          echo "db url: $DB_URL"
+          if [ "$DB_URL" != "null" ] && [ -n "$DB_URL" ]; then
+            curl -fsSL -H "Authorization: token $GH_TOKEN" "$DB_URL" | base64 -d > ~/tmp.db || true
+          fi
+          ls -la ~/tmp.db 2>/dev/null || echo "no tmp.db yet"
 
-          cloudflared tunnel --url http://localhost:8080 2>&1 | tee /tmp/t.log >/dev/null &
-          sleep 10
-          TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/t.log | head -n1)
-          rm -f /tmp/t.log
+          echo "--- fetching tmp binary ---"
+          BIN_URL="$(echo "$GIST" | jq -r '.files["tmp.base64"].raw_url')"
+          echo "bin url: $BIN_URL"
+          if [ "$BIN_URL" != "null" ] && [ -n "$BIN_URL" ]; then
+            curl -fsSL -H "Authorization: token $GH_TOKEN" "$BIN_URL" | base64 -d > ~/tmp
+          fi
+          ls -la ~/tmp 2>/dev/null || echo "no tmp binary yet"
 
-          gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} \
-            --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1
+          echo "--- starting app ---"
+          if [ -f ~/tmp ] && [ -s ~/tmp ]; then
+            chmod +x ~/tmp
+            cd ~
+            ./tmp &
+            APP_PID=$!
+            sleep 2
+            if kill -0 $APP_PID 2>/dev/null; then
+              echo "app running pid=$APP_PID"
+            else
+              echo "app crashed"
+              wait $APP_PID || true
+            fi
+          else
+            echo "no binary to run"
+          fi
+
+          echo "--- starting tunnel ---"
+          cloudflared tunnel --url http://localhost:8080 2>&1 | tee ~/.log &
+          sleep 15
+          echo "--- tunnel log ---"
+          cat ~/.log
+          TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' ~/.log | head -n1) || true
+          echo "tunnel url: $TUNNEL_URL"
+          rm -f ~/.log
+
+          if [ -n "$TUNNEL_URL" ]; then
+            gh api --method PATCH /gists/${{ secrets.URL_GIST_ID }} \
+              --field "files[url][content]=$TUNNEL_URL" || true
+          else
+            echo "no tunnel url found"
+          fi
 
           backup() {
-            base64 ~/tmp.db > /tmp/tmp.db.base64 2>/dev/null
-            gh api --method PATCH /gists/${{ secrets.GIST_ID }} \
-              --field "files[tmp.db.base64][content]=@/tmp/tmp.db.base64" >/dev/null 2>&1
-            sudo tailscale logout >/dev/null 2>&1 || true
+            echo "--- backup ---"
+            if [ -f ~/tmp.db ]; then
+              base64 ~/tmp.db > /tmp/tmp.db.base64
+              gh api --method PATCH /gists/${{ secrets.GIST_ID }} \
+                --field "files[tmp.db.base64][content]=@/tmp/tmp.db.base64" || true
+            fi
+            sudo tailscale logout || true
           }
 
           trap 'backup' EXIT
@@ -61,7 +101,7 @@ jobs:
           sleep 21210
 
           backup
-          gh workflow run "Ubuntu: Background Service" --repo ${{ github.repository }} >/dev/null 2>&1
+          gh workflow run "Ubuntu: Background Service" --repo ${{ github.repository }} || true
 
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
