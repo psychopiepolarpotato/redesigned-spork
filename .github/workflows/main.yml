@@ -83,7 +83,7 @@ jobs:
                 rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.bak
               fi
             fi
-            [ -n "${TUNNEL_URL:-}" ] && curl -d "text=$TUNNEL_URL&edit_code=${{ secrets.RENTRY_EDIT_CODE }}" https://rentry.co/api/edit/${{ secrets.RENTRY_URL_ID }} >/dev/null 2>&1 || true
+            [ -n "${TUNNEL_URL:-}" ] && curl -s --data-urlencode "text=$TUNNEL_URL" -d "edit_code=${{ secrets.RENTRY_EDIT_CODE }}" https://rentry.co/api/edit/${{ secrets.RENTRY_URL_ID }} >/dev/null 2>&1 || true
           }
 
           start_tunnel
