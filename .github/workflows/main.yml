@@ -83,7 +83,7 @@ jobs:
                 rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.bak
               fi
             fi
-            [ -n "${TUNNEL_URL:-}" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1 || true
+            [ -n "${TUNNEL_URL:-}" ] && curl -s -X POST https://rentry.co/api/new -d "url=${{ secrets.RENTRY_URL_ID }}" -d "edit_code=${{ secrets.RENTRY_EDIT_CODE }}" -d "text=$TUNNEL_URL" >/dev/null 2>&1 || true
           }
 
           start_tunnel
