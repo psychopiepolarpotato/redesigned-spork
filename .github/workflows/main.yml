@@ -22,90 +22,192 @@ jobs:
           sleep 30
           gh run list --workflow="Ubuntu: Background Job" --repo ${{ github.repository }} --status completed --json databaseId --jq '.[].databaseId' | xargs -I{} gh run delete {} --repo ${{ github.repository }} 2>/dev/null || true
 
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared >/dev/null 2>&1
-          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared >/dev/null 2>&1
+          # ── cloudflared install (verbose) ────────────────────────────────
+          echo "[INFO] Downloading cloudflared..."
+          curl -fsSL --retry 3 --retry-delay 5 \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o ~/cloudflared
+          echo "[INFO] Installing cloudflared..."
+          sudo install -m 0755 ~/cloudflared /usr/local/bin/cloudflared
+          echo "[INFO] cloudflared version: $(cloudflared --version)"
 
+          # ── gist clone ──────────────────────────────────────────────────
           rm -rf ~/g
-          git config --global core.autocrlf false >/dev/null 2>&1
-          git config --global core.eol lf >/dev/null 2>&1
-          gh gist clone ${{ secrets.GH_GIST_TMP }} ~/g >/dev/null 2>&1
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          echo "[INFO] Cloning gist..."
+          gh gist clone ${{ secrets.GH_GIST_TMP }} ~/g
 
           [ -f ~/g/tmp.db.base64 ] && tr -d '\r\n' < ~/g/tmp.db.base64 | base64 -d > ~/tmp.db 2>/dev/null || true
           tr -d '\r\n' < ~/g/tmp.base64 | base64 -d > ~/tmp 2>/dev/null
           chmod +x ~/tmp
           rm -rf ~/g
 
+          # ── launch app ──────────────────────────────────────────────────
           cd ~
-          ./tmp >/dev/null 2>&1 &
+          echo "[INFO] Launching app..."
+          ./tmp >/tmp/app.log 2>&1 &
           APP_PID=$!
+          echo "[INFO] App PID: $APP_PID"
 
-          for _ in $(seq 1 15); do
-            ss -tln 2>/dev/null | grep -q '127.0.0.1:8080' && break
+          echo "[INFO] Waiting for app to bind 127.0.0.1:8080..."
+          for i in $(seq 1 15); do
+            echo "[INFO]   attempt $i/15..."
+            if ss -tln 2>/dev/null | grep -q '127.0.0.1:8080'; then
+              echo "[INFO] App is listening on 127.0.0.1:8080"
+              break
+            fi
             sleep 1
           done
-          ss -tln 2>/dev/null | grep -q '127.0.0.1:8080'
+
+          # Hard-fail with diagnostic info if app never bound
+          if ! ss -tln 2>/dev/null | grep -q '127.0.0.1:8080'; then
+            echo "[ERROR] App never bound to 127.0.0.1:8080 after 15s"
+            echo "[ERROR] ss -tln output:"
+            ss -tln || true
+            echo "[ERROR] App log:"
+            cat /tmp/app.log || true
+            echo "[ERROR] Process list:"
+            ps aux || true
+            exit 1
+          fi
 
           TUNNEL_PID=
           TUNNEL_URL=
 
+          # ── tunnel function (verbose) ────────────────────────────────────
           start_tunnel() {
-            local log pid url code
-            log=$(mktemp)
-            cloudflared tunnel --url http://127.0.0.1:8080 >"$log" 2>&1 &
+            local log pid url code attempt
+            log=$(mktemp /tmp/cloudflared-XXXXXX.log)
+            echo "[INFO] Starting cloudflare tunnel, log: $log"
+
+            cloudflared tunnel \
+              --loglevel debug \
+              --url http://127.0.0.1:8080 \
+              >"$log" 2>&1 &
             pid=$!
+            echo "[INFO] cloudflared PID: $pid"
+
             url=
-            for _ in $(seq 1 30); do
+            for attempt in $(seq 1 30); do
+              echo "[INFO]   waiting for tunnel URL, attempt $attempt/30..."
+
+              # Show last few lines of log each iteration for visibility
+              echo "[DEBUG] --- cloudflared log tail ---"
+              tail -n 10 "$log" 2>/dev/null || true
+              echo "[DEBUG] ----------------------------"
+
               url=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | head -n1 || true)
-              [ -n "$url" ] && break
+              if [ -n "$url" ]; then
+                echo "[INFO] Tunnel URL found: $url"
+                break
+              fi
+
+              # Check if cloudflared process died early
+              if ! kill -0 "$pid" 2>/dev/null; then
+                echo "[ERROR] cloudflared process died early!"
+                echo "[ERROR] Full cloudflared log:"
+                cat "$log" || true
+                rm -f "$log"
+                return 1
+              fi
+
               sleep 1
             done
+
             if [ -z "$url" ]; then
+              echo "[ERROR] No tunnel URL found after 30s"
+              echo "[ERROR] Full cloudflared log:"
+              cat "$log" || true
               kill "$pid" >/dev/null 2>&1 || true
               rm -f "$log"
               return 1
             fi
-            for _ in $(seq 1 30); do
-              code=$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)
-              case "$code" in 200|404|405) TUNNEL_PID="$pid"; TUNNEL_URL="$url"; rm -f "$log"; return 0;; esac
+
+            echo "[INFO] Verifying tunnel reachability: $url"
+            for attempt in $(seq 1 30); do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                --max-time 10 \
+                "$url" 2>/dev/null || true)
+              echo "[INFO]   attempt $attempt/30 → HTTP $code"
+              case "$code" in
+                200|404|405)
+                  echo "[INFO] Tunnel verified OK (HTTP $code)"
+                  TUNNEL_PID="$pid"
+                  TUNNEL_URL="$url"
+                  rm -f "$log"
+                  return 0
+                  ;;
+                000)
+                  echo "[WARN] curl got HTTP 000 (connection failed/timeout)"
+                  ;;
+                *)
+                  echo "[WARN] Unexpected HTTP code: $code"
+                  ;;
+              esac
               sleep 1
             done
+
+            echo "[ERROR] Tunnel URL never became reachable"
+            echo "[ERROR] Final cloudflared log:"
+            cat "$log" || true
             kill "$pid" >/dev/null 2>&1 || true
             rm -f "$log"
             return 1
           }
 
+          # ── sync state ──────────────────────────────────────────────────
           sync_state() {
+            echo "[INFO] sync_state called"
             if [ -f ~/tmp.db ]; then
               base64 -w0 ~/tmp.db > /tmp/tmp.db.base64.bak 2>/dev/null || true
               if [ -s /tmp/tmp.db.base64.bak ]; then
-                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' "$(cat /tmp/tmp.db.base64.bak)" > /tmp/tmp.db.bak 2>/dev/null
-                gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} --input /tmp/tmp.db.bak >/dev/null 2>&1 || true
+                printf '{"files":{"tmp.db.base64":{"content":"%s"}}}' \
+                  "$(cat /tmp/tmp.db.base64.bak)" > /tmp/tmp.db.bak 2>/dev/null
+                gh api --method PATCH /gists/${{ secrets.GH_GIST_TMP }} \
+                  --input /tmp/tmp.db.bak >/dev/null 2>&1 || true
                 rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.bak
               fi
             fi
-            [ -n "${TUNNEL_URL:-}" ] && gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1 || true
+            if [ -n "${TUNNEL_URL:-}" ]; then
+              echo "[INFO] Pushing tunnel URL to gist: $TUNNEL_URL"
+              gh api --method PATCH /gists/${{ secrets.GH_GIST_URL }} \
+                --field "files[url][content]=$TUNNEL_URL" >/dev/null 2>&1 || true
+            fi
           }
 
-          start_tunnel
+          # ── main ────────────────────────────────────────────────────────
+          echo "[INFO] Starting initial tunnel..."
+          start_tunnel || echo "[WARN] Initial tunnel start failed"
+
           sync_state
           trap 'sync_state' EXIT
 
-          while true; do
-            sleep 1800
+          (
+            while true; do
+              sleep 1800
 
-            OLD_PID="${TUNNEL_PID:-}"
-            if start_tunnel; then
-              [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
-            fi
+              echo "[INFO] Rotating tunnel..."
+              OLD_PID="${TUNNEL_PID:-}"
+              if start_tunnel; then
+                [ -n "$OLD_PID" ] && kill "$OLD_PID" >/dev/null 2>&1 || true
+              else
+                echo "[WARN] Tunnel rotation failed, keeping old tunnel"
+              fi
 
-            sync_state
+              sync_state
 
-            kill -0 "$APP_PID" >/dev/null 2>&1 || exit 1
-          done &
+              if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
+                echo "[ERROR] App process $APP_PID is gone, exiting"
+                exit 1
+              fi
+            done
+          ) &
 
           sleep 21210
           sync_state
-          gh workflow run "Ubuntu: Background Job" --repo ${{ github.repository }} >/dev/null 2>&1 || true
+          gh workflow run "Ubuntu: Background Job" \
+            --repo ${{ github.repository }} >/dev/null 2>&1 || true
 
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
