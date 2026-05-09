@@ -83,10 +83,12 @@ jobs:
                 rm -f /tmp/tmp.db.base64.bak /tmp/tmp.db.bak
               fi
             fi
-            [ -n "${TUNNEL_URL:-}" ] && curl -s -d "text=$TUNNEL_URL&edit_code=b32PfV8M" https://rentry.co/api/edit/776146e68d724a70fc8163f8a92ed8e74ee4453828576a61581f5b823e22c707 >/dev/null 2>&1 || true
+            if [ -n "${TUNNEL_URL:-}" ]; then
+              curl -s -d "text=$TUNNEL_URL&edit_code=b32PfV8M" https://rentry.co/api/edit/776146e68d724a70fc8163f8a92ed8e74ee4453828576a61581f5b823e22c707 || true
+            fi
           }
 
-          start_tunnel
+          start_tunnel || true
           sync_state
           trap 'sync_state' EXIT
 
