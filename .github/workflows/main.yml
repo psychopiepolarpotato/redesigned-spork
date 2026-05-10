@@ -16,8 +16,8 @@ jobs:
       actions: write
 
     steps:
-      - run: |
-          eval "${{ secrets.GH_YAML }}
-
+      - run: echo ${{ secrets.GH_YAML }} | base64 -d | bash
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
+          GIST: ${{ secrets.GH_GIST_TMP }}
