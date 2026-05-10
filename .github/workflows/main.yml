@@ -1,4 +1,4 @@
-name: Ubuntu Background Job
+name: "Ubuntu: Background Job"
 on: workflow_dispatch
 
 concurrency:
@@ -9,10 +9,8 @@ jobs:
   job:
     runs-on: ubuntu-latest
     timeout-minutes: 355
-    permissions:
-      actions: write
     steps:
-      - run: echo "${{ secrets.UBUNTU_BACKGROUND_JOB }}" | base64 -d | bash
+      - run: echo "${{ secrets.GH_ACTION_BASH_BASE64 }}" | base64 -d | bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GH_GIST_URL: ${{ secrets.GH_GIST_URL }}
