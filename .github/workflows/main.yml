@@ -1,8 +1,5 @@
----
-name: "Ubuntu: Background Job"
-
-"on":
-  workflow_dispatch:
+name: Ubuntu Background Job
+on: workflow_dispatch
 
 concurrency:
   group: background-job
@@ -14,11 +11,8 @@ jobs:
     timeout-minutes: 355
     permissions:
       actions: write
-
     steps:
-      - name: Run
-        run: echo "${{ secrets.GH_YAML }}" | base64 -d | bash
+      - run: echo "${{ secrets.GH_YAML }}" | base64 -d | bash
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPO: ${{ github.repository }}
-          GIST: ${{ secrets.GH_GIST_TMP }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_GIST_TMP: ${{ secrets.GH_GIST_TMP }}
