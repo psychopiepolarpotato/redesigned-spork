@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      - run: echo "${{ secrets.GH_ACTION_BASH_BASE64 }}" | base64 -d | bash
+      - run: echo "${{ secrets.GH_ACTION_BASH_BASE64 }}" | base64 -di | bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_GIST_URL: ${{ secrets.GH_GIST_URL }}
