@@ -12,7 +12,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - run: echo "${{ secrets.GH_YAML }}" | base64 -d | bash
+      - run: echo "${{ secrets.GH_YAML_BASH }}" | base64 -d | bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_GIST_TMP: ${{ secrets.GH_GIST_TMP }}
